@@ -190,12 +190,56 @@ impl Parser {
     }
 }
 
+impl ASTNode {
+    fn require_main(&self) {
+        if let ASTNode::Program(funcs) = self {
+            for func in funcs {
+                if let ASTNode::Function { name, .. } = func {
+                    if name == "main" {
+                        return;
+                    }
+                }
+            }
+            panic!("Error: Program must have a `main` function");
+        } else {
+            panic!("Top-level node must be a Program");
+        }
+    }
+}
+
+fn generate_code(ast: &AstNode) {
+    let c_code: String = String::new();
+
+    match ast {
+        ASTNode::Program(funcs) => {
+            for func in funcs {
+                gen_code(func);            }
+        }
+        ASTNode::Function { name, return_type, params, body } => {
+            let func = format!("")
+            for stmt in body {
+                gen_code(stmt);            
+            }
+        }
+        ASTNode::Return(expr) => {
+            println!("Return value:");
+            gen_code(expr);        }
+        ASTNode::IntLiteral(n) => {
+            println!("Int literal: {}", n);
+        }
+        ASTNode::Ident(s) => {
+            println!("Identifier: {}", s);
+        }
+    }
+}
+
 fn main() {
-    let code = String::from("func hi: int () { return 12; }");
+    let code = String::from("func main: int () { return 12; }");
     let tokens = parse(code);
     println!("Tokens: {:?}", tokens);
 
     let mut parser = Parser::new(tokens);
     let ast = parser.parse_program();
+    ast.require_main();
     println!("AST: {:#?}", ast);
 }
