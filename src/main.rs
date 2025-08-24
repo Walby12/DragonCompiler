@@ -12,6 +12,20 @@ enum Tokens {
     Semicolon,
 }
 
+#[derive(Debug)]
+enum ASTNode {
+    Program(Vec<ASTNode>),
+    Function {
+        name: String,
+        return_type: String,
+        params: Vec<(String, String)>,
+        body: Vec<ASTNode>,
+    },
+    Return(Box<ASTNode>),
+    IntLiteral(i64),
+    Ident(String),
+}
+
 fn parse(n_parsed: String) -> Vec<Tokens> {
     let mut toks: Vec<Tokens> = Vec::new();
     let chars: Vec<char> = n_parsed.chars().collect();
@@ -84,23 +98,104 @@ fn parse(n_parsed: String) -> Vec<Tokens> {
     toks
 }
 
-fn ast_builder(tokens: Vec<Tokens>) -> String {
-    let mut ast: String = String::from("program[]");
+struct Parser {
+    tokens: Vec<Tokens>,
+    pos: usize,
+}
 
-    let mut i = 0;
+impl Parser {
+    fn new(tokens: Vec<Tokens>) -> Self {
+        Parser { tokens, pos: 0 }
+    }
 
-    while i != tokens.len() {
-        let c = tokens[i];
+    fn peek(&self) -> Option<&Tokens> {
+        self.tokens.get(self.pos)
+    }
 
-        match c {
-            Tokens::Func => {
-            
+    fn advance(&mut self) -> Option<&Tokens> {
+        let tok = self.tokens.get(self.pos);
+        self.pos += 1;
+        tok
+    }
+
+    fn expect(&mut self, expected: Tokens) {
+        let tok = self.advance().expect("Unexpected EOF");
+        if std::mem::discriminant(tok) != std::mem::discriminant(&expected) {
+            panic!("Expected {:?}, got {:?}", expected, tok);
+        }
+    }
+}
+
+impl Parser {
+    fn parse_program(&mut self) -> ASTNode {
+        let mut funcs = Vec::new();
+        while self.peek().is_some() {
+            funcs.push(self.parse_function());
+        }
+        ASTNode::Program(funcs)
+    }
+
+    fn parse_function(&mut self) -> ASTNode {
+        self.expect(Tokens::Func);
+        
+        let name = if let Tokens::Ident(n) = self.advance().unwrap() {
+            n.clone()
+        } else {
+            panic!("Expected function name");
+        };
+
+        self.expect(Tokens::Colon);
+        let return_type = if let Tokens::Ident(rt) = self.advance().unwrap() {
+            rt.clone()
+        } else {
+            panic!("Expected return type");
+        };
+
+        self.expect(Tokens::ParL);
+        self.expect(Tokens::ParR);
+
+        self.expect(Tokens::CurlyL);
+        let mut body = Vec::new();
+        while !matches!(self.peek(), Some(Tokens::CurlyR)) {
+            body.push(self.parse_stmt());
+        }
+        self.expect(Tokens::CurlyR);
+
+        ASTNode::Function {
+            name,
+            return_type,
+            params: Vec::new(),
+            body,
+        }
+    }
+
+    fn parse_stmt(&mut self) -> ASTNode {
+        match self.peek() {
+            Some(Tokens::Return) => {
+                self.advance();
+                let expr = self.parse_expr();
+                self.expect(Tokens::Semicolon);
+                ASTNode::Return(Box::new(expr))
             }
+            _ => panic!("Unexpected token in statement: {:?}", self.peek()),
+        }
+    }
+
+    fn parse_expr(&mut self) -> ASTNode {
+        match self.advance() {
+            Some(Tokens::Int(n)) => ASTNode::IntLiteral(*n),
+            Some(Tokens::Ident(s)) => ASTNode::Ident(s.clone()),
+            other => panic!("Unexpected token in expression: {:?}", other),
         }
     }
 }
 
 fn main() {
-    let c = parse(String::from("func hi: int () { return 12; }"));
-    println!("{:?}", c);
+    let code = String::from("func hi: int () { return 12; }");
+    let tokens = parse(code);
+    println!("Tokens: {:?}", tokens);
+
+    let mut parser = Parser::new(tokens);
+    let ast = parser.parse_program();
+    println!("AST: {:#?}", ast);
 }
