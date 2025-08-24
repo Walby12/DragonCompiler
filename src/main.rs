@@ -84,6 +84,22 @@ fn parse(n_parsed: String) -> Vec<Tokens> {
     toks
 }
 
+fn ast_builder(tokens: Vec<Tokens>) -> String {
+    let mut ast: String = String::from("program[]");
+
+    let mut i = 0;
+
+    while i != tokens.len() {
+        let c = tokens[i];
+
+        match c {
+            Tokens::Func => {
+            
+            }
+        }
+    }
+}
+
 fn main() {
     let c = parse(String::from("func hi: int () { return 12; }"));
     println!("{:?}", c);
