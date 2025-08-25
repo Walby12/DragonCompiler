@@ -1,5 +1,9 @@
 use std::fs::File;
 use std::io::Write;
+use std::env;
+use std::path::Path;
+use std::fs;
+use std::process::Command;
 
 #[derive(Debug)]
 enum Tokens {
@@ -91,10 +95,10 @@ fn parse(n_parsed: String) -> Vec<Tokens> {
                     i += 1;
                     c = chars[i];
                 }
-                toks.push(Tokens::Int(builder.parse::<i64>().expect("Could not parse i64")))
+                toks.push(Tokens::Int(builder.parse::<i64>().expect("ERROR: Could not parse i64")))
             }
             _ => {
-                eprintln!("ERROR: unparsable token: {:?}", c);
+                panic!("ERROR: unparsable token: {:?}", c);
             }
         }
     }
@@ -122,9 +126,9 @@ impl Parser {
     }
 
     fn expect(&mut self, expected: Tokens) {
-        let tok = self.advance().expect("Unexpected EOF");
+        let tok = self.advance().expect("ERROR: Unexpected EOF");
         if std::mem::discriminant(tok) != std::mem::discriminant(&expected) {
-            panic!("Expected {:?}, got {:?}", expected, tok);
+            panic!("ERROR: Expected {:?}, got {:?}", expected, tok);
         }
     }
 }
@@ -144,14 +148,14 @@ impl Parser {
         let name = if let Tokens::Ident(n) = self.advance().unwrap() {
             n.clone()
         } else {
-            panic!("Expected function name");
+            panic!("ERROR: Expected function name");
         };
 
         self.expect(Tokens::Colon);
         let return_type = if let Tokens::Ident(rt) = self.advance().unwrap() {
             rt.clone()
         } else {
-            panic!("Expected return type");
+            panic!("ERROR: Expected return type");
         };
 
         self.expect(Tokens::ParL);
@@ -172,23 +176,35 @@ impl Parser {
         }
     }
 
-    fn parse_stmt(&mut self) -> ASTNode {
+    fn parse_stmt(&mut self, current_return_type: &str) -> ASTNode {
         match self.peek() {
             Some(Tokens::Return) => {
                 self.advance();
-                let expr = self.parse_expr();
-                self.expect(Tokens::Semicolon);
-                ASTNode::Return(Box::new(expr))
+                if matches!(self.peek(), Some(Tokens::Semicolon)) {
+                    self.expect(Tokens::Semicolon);
+                    if current_return_type != "none" {
+                        panic!("ERROR: return without value in function returning {current_return_type}");
+                    }
+                    ASTNode::Return(Box::new(ASTNode::Ident("".into())))
+                } else {
+                    let expr = self.parse_expr();
+                    self.expect(Tokens::Semicolon);
+                    if current_return_type == "none" {
+                        panic!("ERROR: return with value in function returning none");
+                    }
+                    ASTNode::Return(Box::new(expr))
+                }
             }
             _ => panic!("Unexpected token in statement: {:?}", self.peek()),
         }
     }
 
+
     fn parse_expr(&mut self) -> ASTNode {
         match self.advance() {
             Some(Tokens::Int(n)) => ASTNode::IntLiteral(*n),
             Some(Tokens::Ident(s)) => ASTNode::Ident(s.clone()),
-            other => panic!("Unexpected token in expression: {:?}", other),
+            other => panic!("ERROR: Unexpected token in expression: {:?}", other),
         }
     }
 }
@@ -203,9 +219,9 @@ impl ASTNode {
                     }
                 }
             }
-            panic!("Error: Program must have a `main` function");
+            panic!("ERROR: Program must have a `main` function");
         } else {
-            panic!("Top-level node must be a Program");
+            panic!("ERROR: Top-level node must be a Program");
         }
     }
 }
@@ -221,28 +237,59 @@ fn generate_code(ast: &ASTNode) -> String {
             code
         }
         ASTNode::Function { name, return_type, params, body } => {
-            let mut ret_type: String = String::new();
-            if return_type == "int" {
-                ret_type = String::from("i64");
-            } else {
-                eprintln!("ERROR: Unexpected return type: {}", return_type);
-            }
             let params_str: Vec<String> = params
                 .iter()
                 .map(|(pname, ptype)| format!("{pname}: {ptype}"))
                 .collect();
 
-            let mut code = format!("fn {name}({}) -> {ret_type} {{\n", params_str.join(", "));
+            let mut code = String::new();
 
-            for stmt in body {
-                code.push_str("    ");
-                code.push_str(&generate_code(stmt));
-                code.push('\n');
+            if name == "main" {
+                if return_type == "none" {
+                    code.push_str(&format!("fn main() {{\n"));
+                    for stmt in body {
+                        code.push_str("    ");
+                        code.push_str(&generate_code(stmt));
+                        code.push('\n');
+                    }
+                } else if return_type == "int" {
+                    code.push_str(&format!("fn main() {{\n"));
+                    for stmt in body {
+                        match stmt {
+                            ASTNode::Return(expr) => {
+                                code.push_str("    std::process::exit(");
+                                code.push_str(&generate_code(expr));
+                                code.push_str(");\n");
+                            }
+                            other => {
+                                code.push_str("    ");
+                                code.push_str(&generate_code(other));
+                                code.push('\n');
+                            }
+                        }
+                    }
+                } else {
+                    panic!("ERROR: main must return either 'none' or 'int'");
+                }
+            } else {
+                let rust_type = match return_type.as_str() {
+                    "int" => "i64",
+                    "none" => "()",
+                    _ => panic!("Unknown return type: {}", return_type),
+                };
+                code.push_str(&format!("fn {name}({}) -> {rust_type} {{\n", params_str.join(", ")));
+                for stmt in body {
+                    code.push_str("    ");
+                    code.push_str(&generate_code(stmt));
+                    code.push('\n');
+                }
             }
 
             code.push_str("}\n");
             code
         }
+
+
         ASTNode::Return(expr) => {
             format!("return {};", generate_code(expr))
         }
@@ -255,17 +302,67 @@ fn generate_code(ast: &ASTNode) -> String {
     }
 }
 
-fn main() {
-    let code = String::from("func main: int () { return 12; }");
-    let tokens = parse(code);
+fn compile_with_rustc(rs_file: &str, out_file: &str) {
+    let status = Command::new("rustc")
+        .arg(rs_file)
+        .arg("-o")
+        .arg(out_file)
+        .status()
+        .expect("Failed to run rustc");
 
+    if !status.success() {
+        eprintln!("rustc failed with status: {}", status);
+        std::process::exit(1);
+    }
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() <= 1 {
+        eprintln!("ERROR: Not enough args for compilation\n\nUsage: {} <file_name> [out_file_name]", args[0]);
+        return;
+    }
+
+    let file_name = &args[1];
+
+    let out_file_name = if args.len() == 3 {
+        args[2].clone()
+    } else {
+        let path = Path::new(file_name);
+
+        if path.extension().and_then(|ext| ext.to_str()) != Some("drc") {
+            eprintln!("ERROR: Input file must have .drc extension");
+            return;
+        }
+
+        let stem = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(file_name);
+        let mut out_path = path.with_file_name(format!("{stem}.rs"));
+        out_path.to_string_lossy().to_string()
+    };
+
+
+    let code = fs::read_to_string(file_name).expect("ERROR: Could not read input file");
+
+    let tokens = parse(code);
     let mut parser = Parser::new(tokens);
     let ast = parser.parse_program();
     ast.require_main();
 
     let code = generate_code(&ast);
 
-    let mut file = File::create("test.rs").expect("Could not crate file"); 
-    
-    file.write_all(code.as_bytes()).expect("Could not write to file");
+    let mut file = File::create(&out_file_name).expect("ERROR: Could not create output file"); 
+    file.write_all(code.as_bytes()).expect("ERROR: Could not write to output file");
+
+    let exe_name = Path::new(&out_file_name)
+        .with_extension("")
+        .to_string_lossy()
+        .to_string();
+
+    compile_with_rustc(&out_file_name, &exe_name);
+
+    println!("Compiled executable: {exe_name}");
+
 }
