@@ -1,3 +1,6 @@
+use std::fs::File;
+use std::io::Write;
+
 #[derive(Debug)]
 enum Tokens {
     Func,
@@ -207,28 +210,47 @@ impl ASTNode {
     }
 }
 
-fn generate_code(ast: &AstNode) {
-    let c_code: String = String::new();
-
+fn generate_code(ast: &ASTNode) -> String {
     match ast {
         ASTNode::Program(funcs) => {
+            let mut code = String::new();
             for func in funcs {
-                gen_code(func);            }
+                code.push_str(&generate_code(func));
+                code.push('\n');
+            }
+            code
         }
         ASTNode::Function { name, return_type, params, body } => {
-            let func = format!("")
-            for stmt in body {
-                gen_code(stmt);            
+            let mut ret_type: String = String::new();
+            if return_type == "int" {
+                ret_type = String::from("i64");
+            } else {
+                eprintln!("ERROR: Unexpected return type: {}", return_type);
             }
+            let params_str: Vec<String> = params
+                .iter()
+                .map(|(pname, ptype)| format!("{pname}: {ptype}"))
+                .collect();
+
+            let mut code = format!("fn {name}({}) -> {ret_type} {{\n", params_str.join(", "));
+
+            for stmt in body {
+                code.push_str("    ");
+                code.push_str(&generate_code(stmt));
+                code.push('\n');
+            }
+
+            code.push_str("}\n");
+            code
         }
         ASTNode::Return(expr) => {
-            println!("Return value:");
-            gen_code(expr);        }
+            format!("return {};", generate_code(expr))
+        }
         ASTNode::IntLiteral(n) => {
-            println!("Int literal: {}", n);
+            n.to_string()
         }
         ASTNode::Ident(s) => {
-            println!("Identifier: {}", s);
+            s.clone()
         }
     }
 }
@@ -236,10 +258,14 @@ fn generate_code(ast: &AstNode) {
 fn main() {
     let code = String::from("func main: int () { return 12; }");
     let tokens = parse(code);
-    println!("Tokens: {:?}", tokens);
 
     let mut parser = Parser::new(tokens);
     let ast = parser.parse_program();
     ast.require_main();
-    println!("AST: {:#?}", ast);
+
+    let code = generate_code(&ast);
+
+    let mut file = File::create("test.rs").expect("Could not crate file"); 
+    
+    file.write_all(code.as_bytes()).expect("Could not write to file");
 }
