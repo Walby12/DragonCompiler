@@ -1,3 +1,5 @@
 func main: none () {
-  return 0;
+}
+func hi: int () {
+  return 2;
 }

@@ -1,4 +1,6 @@
 fn main() {
-    return 0;
 }
 
+fn hi() -> i64 {
+    return 2;
+}
