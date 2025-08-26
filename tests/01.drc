@@ -1,5 +1,5 @@
 func main: none () {
-  print("Hello world");
+  print(32);
 }
 func hi: int () {
   return 2;

@@ -34,6 +34,7 @@ enum ASTNode {
     Ident(String),
     Print {
         thing: String,
+        print_t: String,
     },
 }
 
@@ -147,8 +148,17 @@ impl Parser {
 
         self.expect(Tokens::ParL)?;
 
+        let mut print_t = String::new();
+
         let thing = match self.advance() {
-            Some(Tokens::Str(n)) => n.clone(),
+            Some(Tokens::Str(n)) => {
+                print_t = String::from("str");
+                n.clone()
+            }
+            Some(Tokens::Int(n)) => {
+                print_t = String::from("int");
+                n.to_string()
+            }
             _ => {
                 return Err(ParseError {
                     message: format!(
@@ -164,7 +174,8 @@ impl Parser {
         self.expect(Tokens::Semicolon)?;
 
         Ok(ASTNode::Print {
-            thing
+            thing,
+            print_t,
         })
 
     }
@@ -271,9 +282,15 @@ fn generate_code(ast: &ASTNode) -> String {
             code.push_str("}\n");
             code
         }
-        ASTNode::Print { thing } => {
+        ASTNode::Print { thing, print_t } => {
             let mut code = String::new();
-            code.push_str(&format!("println!(\"{}\");", thing));
+    
+            if print_t == "str" {
+                code.push_str(&format!("println!(\"{}\");", thing));
+            } else {
+                code.push_str(&format!("println!(\"{}\");", thing));
+            }
+
             code
         }
         ASTNode::Return(expr) => {
