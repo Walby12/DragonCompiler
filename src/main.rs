@@ -15,7 +15,9 @@ enum Tokens {
     CurlyR,
     Return,
     Int(i64),
+    Str(String),
     Semicolon,
+    Print,
 }
 
 #[derive(Debug)]
@@ -30,6 +32,9 @@ enum ASTNode {
     Return(Box<ASTNode>),
     IntLiteral(i64),
     Ident(String),
+    Print {
+        thing: String,
+    },
 }
 
 #[derive(Debug)]
@@ -137,6 +142,32 @@ impl Parser {
             body,
         })
     }
+    fn parse_print(&mut self) -> Result<ASTNode, ParseError> {
+        self.expect(Tokens::Print)?;
+
+        self.expect(Tokens::ParL)?;
+
+        let thing = match self.advance() {
+            Some(Tokens::Str(n)) => n.clone(),
+            _ => {
+                return Err(ParseError {
+                    message: format!(
+                        "Parse error at token {}: expected a string name after `print`",
+                        self.pos
+                    ),
+                    position: self.pos,
+                })
+            }
+        };
+
+        self.expect(Tokens::ParR);
+        self.expect(Tokens::Semicolon);
+
+        Ok(ASTNode::Print {
+            thing
+        })
+
+    }
 
     fn parse_stmt(&mut self, current_return_type: &str) -> Result<ASTNode, ParseError> {
         match self.peek() {
@@ -238,6 +269,11 @@ fn generate_code(ast: &ASTNode) -> String {
             code.push_str("}\n");
             code
         }
+        ASTNode::Print { thing } => {
+            let mut code = String::new();
+            code.push_str(&format!("print!(\"{}\");", thing));
+            code
+        }
         ASTNode::Return(expr) => {
             if let ASTNode::Ident(ref s) = **expr {
                 if s.is_empty() {
@@ -269,6 +305,14 @@ fn parse(code: String) -> Vec<Tokens> {
             '}' => { toks.push(Tokens::CurlyR); i += 1; }
             ';' => { toks.push(Tokens::Semicolon); i += 1; }
             ' ' | '\n' | '\t' => { i += 1; }
+            '"' => {
+                let mut builder = String::new();
+                while i < chars.len() && chars[i] != '"' {
+                    builder.push(chars[i]);
+                    i += 1;
+                }
+                toks.push(Tokens::Str(builder));
+            }
             c if c.is_alphabetic() => {
                 let mut builder = String::new();
                 while i < chars.len() && chars[i].is_alphabetic() {
@@ -278,6 +322,7 @@ fn parse(code: String) -> Vec<Tokens> {
                 match builder.as_str() {
                     "func" => toks.push(Tokens::Func),
                     "return" => toks.push(Tokens::Return),
+                    "print" => toks.push(Tokens::Print),
                     _ => toks.push(Tokens::Ident(builder)),
                 }
             }
