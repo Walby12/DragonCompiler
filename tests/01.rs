@@ -1,4 +1,5 @@
 fn main() {
+    println!("Hello world");
 }
 
 fn hi() -> i64 {

@@ -160,8 +160,8 @@ impl Parser {
             }
         };
 
-        self.expect(Tokens::ParR);
-        self.expect(Tokens::Semicolon);
+        self.expect(Tokens::ParR)?;
+        self.expect(Tokens::Semicolon)?;
 
         Ok(ASTNode::Print {
             thing
@@ -198,12 +198,14 @@ impl Parser {
                 };
                 Ok(ASTNode::Return(expr))
             }
+            Some(Tokens::Print) => self.parse_print(),
             other => Err(ParseError {
                 message: format!("Unexpected token in statement: {:?}", other),
                 position: self.pos,
             }),
         }
     }
+
 
     fn parse_expr(&mut self) -> Result<ASTNode, ParseError> {
         match self.advance() {
@@ -271,7 +273,7 @@ fn generate_code(ast: &ASTNode) -> String {
         }
         ASTNode::Print { thing } => {
             let mut code = String::new();
-            code.push_str(&format!("print!(\"{}\");", thing));
+            code.push_str(&format!("println!(\"{}\");", thing));
             code
         }
         ASTNode::Return(expr) => {
@@ -306,13 +308,19 @@ fn parse(code: String) -> Vec<Tokens> {
             ';' => { toks.push(Tokens::Semicolon); i += 1; }
             ' ' | '\n' | '\t' => { i += 1; }
             '"' => {
+                i += 1;
                 let mut builder = String::new();
                 while i < chars.len() && chars[i] != '"' {
                     builder.push(chars[i]);
                     i += 1;
                 }
+                if i >= chars.len() {
+                    panic!("Unterminated string literal");
+                }
+                i += 1;
                 toks.push(Tokens::Str(builder));
             }
+
             c if c.is_alphabetic() => {
                 let mut builder = String::new();
                 while i < chars.len() && chars[i].is_alphabetic() {
@@ -396,6 +404,5 @@ fn main() {
     let exe_name = Path::new(&out_file_name).with_extension("").to_string_lossy().to_string();
     compile_with_rustc(&out_file_name, &exe_name);
 
-    println!("Compiled executable: {}", exe_name);
+    println!("Compilation succesful: {}", exe_name);
 }
-
