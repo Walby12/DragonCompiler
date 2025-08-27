@@ -23,6 +23,7 @@ enum Tokens {
     Int(i64),
     Str(String),
     Plus,
+    Import,
 }
 
 fn lex(code: &str) -> Vec<Tokens> {
@@ -67,6 +68,7 @@ fn lex(code: &str) -> Vec<Tokens> {
                     "var" => toks.push(Tokens::Var),
                     "return" => toks.push(Tokens::Return),
                     "print" => toks.push(Tokens::Print),
+                    "import" => toks.push(Tokens::Import),
                     _ => toks.push(Tokens::Ident(builder)),
                 }
             }
@@ -124,6 +126,7 @@ enum Stmt {
     Print { expr: Expr },
     Return { expr: Option<Expr> },
     ExprStmt { expr: Expr },
+    Import { file: String },
 }
 
 #[derive(Debug, Clone)]
@@ -349,6 +352,21 @@ impl Parser {
                     Ok(Stmt::ExprStmt { expr })
                 }
             }
+            Some(Tokens::Import) => {
+                if matches!(self.peek_n(1), Some(Tokens::Ident)) {
+                    let name = match self.advance() {
+                        Some(Tokens::Ident(n)) => n,
+                        _ => unreachable!(),
+                    };
+                    self.expect(Tokens::Semicolon)?;
+                    Ok(Stmt::Import { name })
+                } else {
+                    Err (ParseError {
+                        message: forma!("Expected ident after an import statement"),
+                        position: self.pos,
+                    })                
+                }
+            }
             other => Err(ParseError {
                 message: format!("Unexpected token in statement: {:?}", other),
                 position: self.pos,
@@ -547,6 +565,7 @@ fn gen_expr(e: &Expr) -> String {
             format!("{}({})", name, args_str)
         }
         Expr::Add(l, r) => format!("({} + {})", gen_expr(l), gen_expr(r)),
+        Expr::Import(n) => format!("use {}", n),
     }
 }
 
