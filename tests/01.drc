@@ -1,6 +1,11 @@
-func main: none () {
-  print(32);
+func sum: int(a: int, b: int) {
+    return a + b;
 }
-func hi: int () {
-  return 2;
+
+func main: none() {
+    var total: int = sum(7, 5);
+    print(total);
+    var string: str = "hello";
+    print(string);
 }
+
