@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone)]
@@ -83,7 +83,6 @@ fn lex(code: &str) -> Vec<Tokens> {
             _ => panic!("Unrecognized token: {}", c),
         }
     }
-
     toks
 }
 
@@ -119,7 +118,7 @@ struct FuncSig {
     ret: Type,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Stmt {
     VarDecl { name: String, var_type: String, value: Expr },
     Assign { name: String, value: Expr },
@@ -129,7 +128,7 @@ enum Stmt {
     Import { file: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Expr {
     Int(i64),
     Str(String),
@@ -163,6 +162,21 @@ struct Parser {
 }
 
 impl Parser {
+
+    fn load_import(&mut self, file: &str, funcs: &mut Vec<Function>) -> Result<(), ParseError> {
+        let path = format!("{}.drc", file);
+        let code = std::fs::read_to_string(&path)
+            .map_err(|_| ParseError { message: format!("Import file not found: {}", path), position: self.pos })?;
+        let tokens = lex(&code);
+        let mut parser = Parser::new(tokens);
+        let mut imported_prog = parser.parse_program()?;
+
+        funcs.extend(imported_prog.funcs);
+
+        Ok(())
+    }
+
+
     fn new(tokens: Vec<Tokens>) -> Self {
         Parser { tokens, pos: 0 }
     }
@@ -202,9 +216,23 @@ impl Parser {
 
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut funcs = Vec::new();
-        while self.peek().is_some() {
-            funcs.push(self.parse_function()?);
+
+        while let Some(token) = self.peek() {
+            match token {
+                Tokens::Func => funcs.push(self.parse_function()?),
+                Tokens::Import => { 
+                    let stmt = self.parse_stmt("none")?; 
+                    if let Stmt::Import { file } = stmt {
+                        self.load_import(&file, &mut funcs)?;
+                    }
+                }
+                _ => return Err(ParseError { 
+                    message: format!("Unexpected token at top-level: {:?}", token), 
+                    position: self.pos 
+                }),
+            }
         }
+
         Ok(Program { funcs })
     }
 
@@ -330,220 +358,153 @@ impl Parser {
             }
             Some(Tokens::Print) => {
                 self.advance();
-                self.expect(Tokens::ParL)?;
                 let expr = self.parse_expr()?;
-                self.expect(Tokens::ParR)?;
                 self.expect(Tokens::Semicolon)?;
                 Ok(Stmt::Print { expr })
             }
             Some(Tokens::Ident(_)) => {
-                if matches!(self.peek_n(1), Some(Tokens::Assign)) {
-                    let name = match self.advance() {
-                        Some(Tokens::Ident(n)) => n,
-                        _ => unreachable!(),
-                    };
-                    self.expect(Tokens::Assign)?;
-                    let value = self.parse_expr()?;
-                    self.expect(Tokens::Semicolon)?;
-                    Ok(Stmt::Assign { name, value })
-                } else {
-                    let expr = self.parse_expr()?;
-                    self.expect(Tokens::Semicolon)?;
-                    Ok(Stmt::ExprStmt { expr })
-                }
+                let e = self.parse_expr()?;
+                self.expect(Tokens::Semicolon)?;
+                Ok(Stmt::ExprStmt { expr: e })
             }
             Some(Tokens::Import) => {
-                if matches!(self.peek_n(1), Some(Tokens::Ident)) {
-                    let name = match self.advance() {
-                        Some(Tokens::Ident(n)) => n,
-                        _ => unreachable!(),
-                    };
-                    self.expect(Tokens::Semicolon)?;
-                    Ok(Stmt::Import { name })
-                } else {
-                    Err (ParseError {
-                        message: forma!("Expected ident after an import statement"),
-                        position: self.pos,
-                    })                
-                }
+                self.advance();
+                let name = match self.advance() {
+                    Some(Tokens::Str(s)) => s,
+                    Some(Tokens::Ident(s)) => s,
+                    other => {
+                        return Err(ParseError {
+                            message: format!("Expected string or identifier after import, found {:?}", other),
+                            position: self.pos - 1,
+                        })
+                    }
+                };
+                self.expect(Tokens::Semicolon)?;
+                Ok(Stmt::Import { file: name })
             }
             other => Err(ParseError {
-                message: format!("Unexpected token in statement: {:?}", other),
+                message: format!("Unexpected token: {:?}", other),
                 position: self.pos,
             }),
         }
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_term()?;
-        while matches!(self.peek(), Some(Tokens::Plus)) {
-            self.advance();
-            let right = self.parse_term()?;
-            left = Expr::Add(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
-    fn parse_term(&mut self) -> Result<Expr, ParseError> {
-        match self.advance() {
-            Some(Tokens::Int(n)) => Ok(Expr::Int(n)),
-            Some(Tokens::Str(s)) => Ok(Expr::Str(s)),
-            Some(Tokens::Ident(name)) => {
+        let mut left = match self.advance() {
+            Some(Tokens::Int(n)) => Expr::Int(n),
+            Some(Tokens::Str(s)) => Expr::Str(s),
+            Some(Tokens::Ident(s)) => {
                 if matches!(self.peek(), Some(Tokens::ParL)) {
-                    self.advance();
+                    self.advance(); // consume '('
                     let mut args = Vec::new();
                     if !matches!(self.peek(), Some(Tokens::ParR)) {
                         loop {
                             args.push(self.parse_expr()?);
                             if matches!(self.peek(), Some(Tokens::Comma)) {
                                 self.advance();
-                                continue;
                             } else {
                                 break;
                             }
                         }
                     }
                     self.expect(Tokens::ParR)?;
-                    Ok(Expr::Call { name, args })
+                    Expr::Call { name: s, args }
                 } else {
-                    Ok(Expr::Ident(name))
+                    Expr::Ident(s)
                 }
             }
             Some(Tokens::ParL) => {
-                let e = self.parse_expr()?;
+                let expr = self.parse_expr()?;
                 self.expect(Tokens::ParR)?;
-                Ok(e)
+                expr
             }
-            other => Err(ParseError {
+            other => return Err(ParseError {
                 message: format!("Unexpected token in expression: {:?}", other),
                 position: self.pos,
             }),
+        };
+
+        while matches!(self.peek(), Some(Tokens::Plus)) {
+            self.advance();
+            let right = self.parse_expr()?;
+            left = Expr::Add(Box::new(left), Box::new(right));
         }
+
+        Ok(left)
     }
+    
 }
 
 impl Program {
-    fn require_main(&self) -> Result<(), String> {
-        for f in &self.funcs {
-            if f.name == "main" {
-                let rt = type_from_str(&f.return_type);
-                if rt != Type::None {
-                    return Err(format!("Program error: `main` must return `none`, found `{}`", f.return_type));
-                }
-                return Ok(());
-            }
-        }
-        Err("Program error: no `main` function found".into())
-    }
+    fn resolve_imports(&mut self, base_path: &Path) -> Result<(), String> {
+        let mut new_funcs = Vec::new();
+        let mut to_remove = Vec::new();
 
-    fn collect_func_sigs(&self) -> Result<HashMap<String, FuncSig>, String> {
-        let mut map = HashMap::new();
-        for f in &self.funcs {
-            if map.contains_key(&f.name) {
-                return Err(format!("Duplicate function `{}`", f.name));
-            }
-            let mut ptys = Vec::new();
-            for (_, t) in &f.params {
-                let tt = type_from_str(t);
-                if tt == Type::Unknown {
-                    return Err(format!("Unknown parameter type `{}` in function `{}`", t, f.name));
-                }
-                ptys.push(tt);
-            }
-            let ret = type_from_str(&f.return_type);
-            if ret == Type::Unknown {
-                return Err(format!("Unknown return type `{}` in function `{}`", f.return_type, f.name));
-            }
-            map.insert(f.name.clone(), FuncSig { params: ptys, ret });
-        }
-        Ok(map)
-    }
-
-    fn infer_expr_type(expr: &Expr, vars: &HashMap<String, Type>, funcs: &HashMap<String, FuncSig>) -> Result<Type, String> {
-        match expr {
-            Expr::Int(_) => Ok(Type::Int),
-            Expr::Str(_) => Ok(Type::Str),
-            Expr::Ident(n) => {
-                vars.get(n).cloned().ok_or_else(|| format!("Use of undeclared variable `{}`", n))
-            }
-            Expr::Call { name, args } => {
-                let sig = funcs.get(name).ok_or_else(|| format!("Unknown function `{}`", name))?;
-                if sig.params.len() != args.len() {
-                    return Err(format!("Argument count mismatch calling `{}`: expected {}, got {}", name, sig.params.len(), args.len()));
-                }
-                for (i, a) in args.iter().enumerate() {
-                    let at = Self::infer_expr_type(a, vars, funcs)?;
-                    if at != sig.params[i] {
-                        return Err(format!("Type mismatch in arg {} calling `{}`: expected {:?}, got {:?}", i + 1, name, sig.params[i], at));
+        for (i, func) in self.funcs.iter().enumerate() {
+            for stmt in &func.body {
+                if let Stmt::Import { file } = stmt {
+                    let import_path = base_path.join(format!("{}.drc", file));
+                    if !import_path.exists() {
+                        return Err(format!("Import file `{}` not found", import_path.display()));
                     }
+
+                    let code = fs::read_to_string(&import_path)
+                        .map_err(|e| format!("Failed to read {}: {}", import_path.display(), e))?;
+                    let tokens = lex(&code);
+                    let mut parser = Parser::new(tokens);
+                    let mut imported_prog = parser.parse_program()
+                        .map_err(|e| format!("Parse error in imported file {}: {}", import_path.display(), e.message))?;
+
+                    imported_prog.resolve_imports(import_path.parent().unwrap())?;
+
+                    new_funcs.extend(imported_prog.funcs);
+
+                    to_remove.push((i, stmt.clone()));
                 }
-                Ok(sig.ret.clone())
-            }
-            Expr::Add(l, r) => {
-                let lt = Self::infer_expr_type(l, vars, funcs)?;
-                let rt = Self::infer_expr_type(r, vars, funcs)?;
-                if lt != Type::Int || rt != Type::Int {
-                    return Err("`+` is only defined for int + int".into());
-                }
-                Ok(Type::Int)
             }
         }
+
+        for (i, stmt) in to_remove.into_iter().rev() {
+            if let Some(f) = self.funcs.get_mut(i) {
+                f.body.retain(|s| s != &stmt);
+            }
+        }
+
+        self.funcs.extend(new_funcs);
+        Ok(())
+    }
+
+    fn require_main(&self) -> Result<(), String> {
+        if !self.funcs.iter().any(|f| f.name == "main") {
+            return Err("Program must have a main function".into());
+        }
+        Ok(())
     }
 
     fn check_types(&self) -> Result<(), String> {
-        let funcs = self.collect_func_sigs()?;
         for f in &self.funcs {
             let expected_ret = type_from_str(&f.return_type);
-            let mut vars: HashMap<String, Type> = HashMap::new();
-            for (pn, pt) in &f.params {
-                let t = type_from_str(pt);
-                vars.insert(pn.clone(), t);
-            }
-
             let mut has_return = false;
-
             for stmt in &f.body {
                 match stmt {
-                    Stmt::VarDecl { name, var_type, value } => {
-                        let declared = type_from_str(var_type);
-                        let actual = Self::infer_expr_type(value, &vars, &funcs)?;
-                        if declared != actual {
-                            return Err(format!("Type error: variable `{}` declared as `{:?}` but initialized with `{:?}`", name, declared, actual));
-                        }
-                        vars.insert(name.clone(), declared);
-                    }
-                    Stmt::Assign { name, value } => {
-                        let vty = vars.get(name).ok_or_else(|| format!("Use of undeclared variable `{}`", name))?.clone();
-                        let aty = Self::infer_expr_type(value, &vars, &funcs)?;
-                        if vty != aty {
-                            return Err(format!("Type error: assign to `{}` of type `{:?}` from `{:?}`", name, vty, aty));
-                        }
-                    }
-                    Stmt::Print { expr } => {
-                        let et = Self::infer_expr_type(expr, &vars, &funcs)?;
-                        if et != Type::Int && et != Type::Str {
-                            return Err(format!("`print` only supports int or str expressions, got `{:?}`", et));
-                        }
-                    }
-                    Stmt::ExprStmt { expr } => {
-                        let _ = Self::infer_expr_type(expr, &vars, &funcs)?;
-                    }
                     Stmt::Return { expr } => {
                         has_return = true;
-                        match expr {
-                            None => {
-                                if expected_ret != Type::None {
-                                    return Err(format!("Type error: function `{}` must return `{:?}` but returns nothing", f.name, expected_ret));
-                                }
+                        if let Some(e) = expr {
+                            let actual = match e {
+                                Expr::Int(_) => Type::Int,
+                                Expr::Str(_) => Type::Str,
+                                Expr::Ident(_) => Type::Unknown,
+                                _ => Type::Unknown,
+                            };
+                            if actual != expected_ret && actual != Type::Unknown {
+                                return Err(format!("Type error in function {}: expected {:?}, got {:?}", f.name, expected_ret, actual));
                             }
-                            Some(e) => {
-                                let actual = Self::infer_expr_type(e, &vars, &funcs)?;
-                                if actual != expected_ret {
-                                    return Err(format!("Type error in function `{}`: expected return `{:?}`, got `{:?}`", f.name, expected_ret, actual));
-                                }
-                            }
+                        } else if expected_ret != Type::None {
+                            return Err(format!("Type error: function {} should return {:?}, but returns nothing", f.name, expected_ret));
                         }
                     }
+                    Stmt::Import { .. } => {}
+                    _ => {}
                 }
             }
 
@@ -565,7 +526,6 @@ fn gen_expr(e: &Expr) -> String {
             format!("{}({})", name, args_str)
         }
         Expr::Add(l, r) => format!("({} + {})", gen_expr(l), gen_expr(r)),
-        Expr::Import(n) => format!("use {}", n),
     }
 }
 
@@ -577,13 +537,12 @@ fn gen_stmt(s: &Stmt) -> String {
         }
         Stmt::Assign { name, value } => format!("{} = {};", name, gen_expr(value)),
         Stmt::Print { expr } => format!("println!(\"{{}}\", {});", gen_expr(expr)),
-        Stmt::Return { expr } => {
-            match expr {
-                None => "return;".to_string(),
-                Some(e) => format!("return {};", gen_expr(e)),
-            }
-        }
+        Stmt::Return { expr } => match expr {
+            None => "return;".to_string(),
+            Some(e) => format!("return {};", gen_expr(e)),
+        },
         Stmt::ExprStmt { expr } => format!("{};", gen_expr(expr)),
+        Stmt::Import { .. } => "".into(),
     }
 }
 
@@ -658,13 +617,19 @@ fn main() {
     let tokens = lex(&code);
     let mut parser = Parser::new(tokens);
 
-    let prog = match parser.parse_program() {
+    let mut prog = match parser.parse_program() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Parse failed: {} at token {}", e.message, e.position);
             std::process::exit(1);
         }
     };
+
+    let base_path = path.parent().unwrap_or(Path::new("."));
+    if let Err(e) = prog.resolve_imports(base_path) {
+        eprintln!("Import error: {}", e);
+        std::process::exit(1);
+    }
 
     if let Err(e) = prog.require_main() {
         eprintln!("{}", e);

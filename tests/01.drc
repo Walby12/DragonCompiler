@@ -1,11 +1,6 @@
-func sum: int(a: int, b: int) {
-    return a + b;
-}
+import "tests/beep";
 
 func main: none() {
-    var total: int = sum(7, 5);
-    print(total);
-    var string: str = "hello";
-    print(string);
+  hi();
 }
 
