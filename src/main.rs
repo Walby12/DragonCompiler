@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Tokens {
     Func,
     Var,
@@ -180,7 +180,7 @@ impl Parser {
     fn parse_block(&mut self) -> Result<Vec<Stmt>, ParseError> {
         let mut stmts = Vec::new();
         while let Some(tok) = self.peek() {
-            if tok == Tokens::CurlyR {
+            if matches!(tok, Tokens::CurlyR) {
                 break;
             }
             let stmt = self.parse_stmt("none")?;
@@ -468,8 +468,8 @@ impl Parser {
         let then_block = self.parse_block()?;
         self.expect(Tokens::CurlyR)?;
 
-        let else_block = if self.peek() == Some(Tokens::Else) {
-            self.next();
+        let else_block = if matches!(self.peek(), Some(Tokens::Else)) {
+            self.advance();
             self.expect(Tokens::CurlyL)?;
             let block = self.parse_block()?;
             self.expect(Tokens::CurlyR)?;
@@ -591,16 +591,16 @@ fn gen_stmt(s: &Stmt) -> String {
         Stmt::If { condition, then_block, else_block } => {
             let mut code = String::new();
             code.push_str("if ");
-            code.push_str(&self.generate_expr(condition));
+            code.push_str(&gen_expr(condition)); // FIXED
             code.push_str(" {\n");
-            for s in then_block {
-                code.push_str(&self.generate_stmt(s));
+            for stmt in then_block {
+                code.push_str(&gen_stmt(stmt)); // FIXED
             }
             code.push_str("}\n");
             if let Some(else_blk) = else_block {
                 code.push_str("else {\n");
-                for s in else_blk {
-                    code.push_str(&self.generate_stmt(s));
+                for stmt in else_blk {
+                    code.push_str(&gen_stmt(stmt)); // FIXED
                 }
                 code.push_str("}\n");
             }
@@ -609,10 +609,10 @@ fn gen_stmt(s: &Stmt) -> String {
         Stmt::Loop { condition, body } => {
             let mut code = String::new();
             code.push_str("while ");
-            code.push_str(&self.generate_expr(condition));
+            code.push_str(&gen_expr(condition)); // FIXED
             code.push_str(" {\n");
-            for s in body {
-                code.push_str(&self.generate_stmt(s));
+            for stmt in body {
+                code.push_str(&gen_stmt(stmt)); // FIXED
             }
             code.push_str("}\n");
             code
