@@ -48,19 +48,18 @@ fn lex(code: &str) -> Vec<Tokens> {
             ',' => { toks.push(Tokens::Comma); i += 1; }
             ';' => { toks.push(Tokens::Semicolon); i += 1; }
             '=' => {
-                let x = i + 1;
-                if chars[i] == '=' {
+                if i + 1 < chars.len() && chars[i + 1] == '=' {
                     toks.push(Tokens::Equals);
-                    i += 1;
+                    i += 2;
                 } else {
-                    toks.push(Tokens::Assign); 
+                    toks.push(Tokens::Assign);
+                    i += 1;
                 }
-                i += 1; 
             }
             '+' => { toks.push(Tokens::Plus); i += 1; }
             ' ' | '\n' | '\t' | '\r' => { i += 1; }
-            '<' => { toks.push(Tokens::Smaller); i+= 1; }
-            '>' => { toks.push(Tokens::Bigger); i+= 1; }
+            '<' => { toks.push(Tokens::Smaller); i += 1; }
+            '>' => { toks.push(Tokens::Bigger); i += 1; }
             '"' => {
                 i += 1;
                 let mut builder = String::new();
@@ -155,18 +154,6 @@ enum Stmt {
         condition: Expr,
         body: Vec<Stmt>,
     },
-    Bigger {
-        l: Expr,
-        r: Expr,
-    },
-    Smaller {
-        l: Expr,
-        r: Expr,
-    },
-    Equals {
-        l: Expr,
-        r: Expr,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +163,9 @@ enum Expr {
     Ident(String),
     Call { name: String, args: Vec<Expr> },
     Add(Box<Expr>, Box<Expr>),
+    Bigger(Box<Expr>, Box<Expr>),
+    Smaller(Box<Expr>, Box<Expr>),
+    Equals(Box<Expr>, Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -348,21 +338,6 @@ impl Parser {
     }
     fn parse_stmt(&mut self, current_return_type: &str) -> Result<Stmt, ParseError> {
         match self.peek() {
-            Some(Tokens::Smaller) => {
-                if matches!(self.peek_n(-1), Some(Tokens::Int(l))) {
-                    self.advance();
-                    self.advance();
-                    self.expect(Tokens::Int(r))?;
-
-                    Ok(Stmt::Smaller { l, r })
-                } else {
-                    return Err(ParseError {
-                        message: format!("Semantic error: expected a integer value in '<'"),
-                        self.pos,
-                    });
-                }
-                
-            }
             Some(Tokens::If) => self.parse_if(),
             Some(Tokens::Loop) => self.parse_loop(),
             Some(Tokens::Return) => {
@@ -421,9 +396,22 @@ impl Parser {
                 Ok(Stmt::Print { expr })
             }
             Some(Tokens::Ident(_)) => {
-                let e = self.parse_expr()?;
-                self.expect(Tokens::Semicolon)?;
-                Ok(Stmt::ExprStmt { expr: e })
+                let ident = match self.advance() {
+                    Some(Tokens::Ident(s)) => s,
+                    _ => unreachable!(),
+                };
+            
+                if matches!(self.peek(), Some(Tokens::Assign)) {
+                    self.advance();
+                    let value = self.parse_expr()?;
+                    self.expect(Tokens::Semicolon)?;
+                    Ok(Stmt::Assign { name: ident, value })
+                } else {
+                    self.pos -= 1;
+                    let e = self.parse_expr()?;
+                    self.expect(Tokens::Semicolon)?;
+                    Ok(Stmt::ExprStmt { expr: e })
+                }
             }
             Some(Tokens::Import) => {
                 self.advance();
@@ -481,10 +469,30 @@ impl Parser {
             }),
         };
 
-        while matches!(self.peek(), Some(Tokens::Plus)) {
-            self.advance();
-            let right = self.parse_expr()?;
-            left = Expr::Add(Box::new(left), Box::new(right));
+        while let Some(token) = self.peek() {
+            match token {
+                Tokens::Plus => {
+                    self.advance();
+                    let right = self.parse_expr()?;
+                    left = Expr::Add(Box::new(left), Box::new(right));
+                }
+                Tokens::Bigger => {
+                    self.advance();
+                    let right = self.parse_expr()?;
+                    left = Expr::Bigger(Box::new(left), Box::new(right));
+                }
+                Tokens::Smaller => {
+                    self.advance();
+                    let right = self.parse_expr()?;
+                    left = Expr::Smaller(Box::new(left), Box::new(right));
+                }
+                Tokens::Equals => {
+                    self.advance();
+                    let right = self.parse_expr()?;
+                    left = Expr::Equals(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
         }
 
         Ok(left)
@@ -613,6 +621,9 @@ fn gen_expr(e: &Expr) -> String {
             format!("{}({})", name, args_str)
         }
         Expr::Add(l, r) => format!("({} + {})", gen_expr(l), gen_expr(r)),
+        Expr::Bigger(l, r) => format!("({} > {})", gen_expr(l), gen_expr(r)),
+        Expr::Smaller(l, r) => format!("({} < {})", gen_expr(l), gen_expr(r)),
+        Expr::Equals(l, r) => format!("({} == {})", gen_expr(l), gen_expr(r)),
     }
 }
 
@@ -625,12 +636,14 @@ fn gen_stmt(s: &Stmt) -> String {
             code.push_str(" {\n");
             for stmt in then_block {
                 code.push_str(&gen_stmt(stmt));
+                code.push_str("\n");
             }
             code.push_str("}\n");
             if let Some(else_blk) = else_block {
                 code.push_str("else {\n");
                 for stmt in else_blk {
                     code.push_str(&gen_stmt(stmt));
+                    code.push_str("\n");
                 }
                 code.push_str("}\n");
             }
@@ -643,6 +656,7 @@ fn gen_stmt(s: &Stmt) -> String {
             code.push_str(" {\n");
             for stmt in body {
                 code.push_str(&gen_stmt(stmt));
+                code.push_str("\n");
             }
             code.push_str("}\n");
             code
@@ -670,7 +684,7 @@ fn generate_rust(prog: &Program) -> String {
             for stmt in &f.body {
                 out.push_str("    ");
                 out.push_str(&gen_stmt(stmt));
-                out.push('\n');
+                out.push_str("\n");
             }
             out.push_str("}\n\n");
         } else {
@@ -683,7 +697,7 @@ fn generate_rust(prog: &Program) -> String {
             for stmt in &f.body {
                 out.push_str("    ");
                 out.push_str(&gen_stmt(stmt));
-                out.push('\n');
+                out.push_str("\n");
             }
             out.push_str("}\n\n");
         }
