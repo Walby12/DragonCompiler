@@ -27,6 +27,9 @@ enum Tokens {
     If,
     Else,
     Loop,
+    Smaller,
+    Equals,
+    Bigger,
 }
 
 fn lex(code: &str) -> Vec<Tokens> {
@@ -44,9 +47,20 @@ fn lex(code: &str) -> Vec<Tokens> {
             '}' => { toks.push(Tokens::CurlyR); i += 1; }
             ',' => { toks.push(Tokens::Comma); i += 1; }
             ';' => { toks.push(Tokens::Semicolon); i += 1; }
-            '=' => { toks.push(Tokens::Assign); i += 1; }
+            '=' => {
+                let x = i + 1;
+                if chars[i] == '=' {
+                    toks.push(Tokens::Equals);
+                    i += 1;
+                } else {
+                    toks.push(Tokens::Assign); 
+                }
+                i += 1; 
+            }
             '+' => { toks.push(Tokens::Plus); i += 1; }
             ' ' | '\n' | '\t' | '\r' => { i += 1; }
+            '<' => { toks.push(Tokens::Smaller); i+= 1; }
+            '>' => { toks.push(Tokens::Bigger); i+= 1; }
             '"' => {
                 i += 1;
                 let mut builder = String::new();
@@ -141,6 +155,18 @@ enum Stmt {
         condition: Expr,
         body: Vec<Stmt>,
     },
+    Bigger {
+        l: Expr,
+        r: Expr,
+    },
+    Smaller {
+        l: Expr,
+        r: Expr,
+    },
+    Equals {
+        l: Expr,
+        r: Expr,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,20 +226,15 @@ impl Parser {
 
         Ok(())
     }
-
-
     fn new(tokens: Vec<Tokens>) -> Self {
         Parser { tokens, pos: 0 }
     }
-
     fn peek(&self) -> Option<&Tokens> {
         self.tokens.get(self.pos)
     }
-
     fn peek_n(&self, n: usize) -> Option<&Tokens> {
         self.tokens.get(self.pos + n)
     }
-
     fn advance(&mut self) -> Option<Tokens> {
         if self.pos < self.tokens.len() {
             let tok = self.tokens[self.pos].clone();
@@ -223,7 +244,6 @@ impl Parser {
             None
         }
     }
-
     fn expect(&mut self, expected: Tokens) -> Result<(), ParseError> {
         let pos = self.pos;
         let got = self.advance().ok_or(ParseError {
@@ -238,7 +258,6 @@ impl Parser {
         }
         Ok(())
     }
-
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut funcs = Vec::new();
 
@@ -257,10 +276,8 @@ impl Parser {
                 }),
             }
         }
-
         Ok(Program { funcs })
     }
-
     fn parse_function(&mut self) -> Result<Function, ParseError> {
         self.expect(Tokens::Func)?;
 
@@ -329,9 +346,23 @@ impl Parser {
 
         Ok(Function { name, return_type, params, body })
     }
-
     fn parse_stmt(&mut self, current_return_type: &str) -> Result<Stmt, ParseError> {
         match self.peek() {
+            Some(Tokens::Smaller) => {
+                if matches!(self.peek_n(-1), Some(Tokens::Int(l))) {
+                    self.advance();
+                    self.advance();
+                    self.expect(Tokens::Int(r))?;
+
+                    Ok(Stmt::Smaller { l, r })
+                } else {
+                    return Err(ParseError {
+                        message: format!("Semantic error: expected a integer value in '<'"),
+                        self.pos,
+                    });
+                }
+                
+            }
             Some(Tokens::If) => self.parse_if(),
             Some(Tokens::Loop) => self.parse_loop(),
             Some(Tokens::Return) => {
@@ -415,14 +446,13 @@ impl Parser {
             }),
         }
     }
-
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         let mut left = match self.advance() {
             Some(Tokens::Int(n)) => Expr::Int(n),
             Some(Tokens::Str(s)) => Expr::Str(s),
             Some(Tokens::Ident(s)) => {
                 if matches!(self.peek(), Some(Tokens::ParL)) {
-                    self.advance(); // consume '('
+                    self.advance();
                     let mut args = Vec::new();
                     if !matches!(self.peek(), Some(Tokens::ParR)) {
                         loop {
@@ -591,16 +621,16 @@ fn gen_stmt(s: &Stmt) -> String {
         Stmt::If { condition, then_block, else_block } => {
             let mut code = String::new();
             code.push_str("if ");
-            code.push_str(&gen_expr(condition)); // FIXED
+            code.push_str(&gen_expr(condition));
             code.push_str(" {\n");
             for stmt in then_block {
-                code.push_str(&gen_stmt(stmt)); // FIXED
+                code.push_str(&gen_stmt(stmt));
             }
             code.push_str("}\n");
             if let Some(else_blk) = else_block {
                 code.push_str("else {\n");
                 for stmt in else_blk {
-                    code.push_str(&gen_stmt(stmt)); // FIXED
+                    code.push_str(&gen_stmt(stmt));
                 }
                 code.push_str("}\n");
             }
@@ -609,10 +639,10 @@ fn gen_stmt(s: &Stmt) -> String {
         Stmt::Loop { condition, body } => {
             let mut code = String::new();
             code.push_str("while ");
-            code.push_str(&gen_expr(condition)); // FIXED
+            code.push_str(&gen_expr(condition));
             code.push_str(" {\n");
             for stmt in body {
-                code.push_str(&gen_stmt(stmt)); // FIXED
+                code.push_str(&gen_stmt(stmt));
             }
             code.push_str("}\n");
             code
