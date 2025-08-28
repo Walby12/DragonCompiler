@@ -24,6 +24,9 @@ enum Tokens {
     Str(String),
     Plus,
     Import,
+    If,
+    Else,
+    Loop,
 }
 
 fn lex(code: &str) -> Vec<Tokens> {
@@ -69,6 +72,9 @@ fn lex(code: &str) -> Vec<Tokens> {
                     "return" => toks.push(Tokens::Return),
                     "print" => toks.push(Tokens::Print),
                     "import" => toks.push(Tokens::Import),
+                    "if" => toks.push(Tokens::If),
+                    "else" => toks.push(Tokens::Else),
+                    "loop" => toks.push(Tokens::Loop),
                     _ => toks.push(Tokens::Ident(builder)),
                 }
             }
@@ -126,6 +132,15 @@ enum Stmt {
     Return { expr: Option<Expr> },
     ExprStmt { expr: Expr },
     Import { file: String },
+    If {
+        condition: Expr,
+        then_block: Vec<Stmt>,
+        else_block: Option<Vec<Stmt>>,
+    },
+    Loop {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,7 +177,17 @@ struct Parser {
 }
 
 impl Parser {
-
+    fn parse_block(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        let mut stmts = Vec::new();
+        while let Some(tok) = self.peek() {
+            if tok == Tokens::CurlyR {
+                break;
+            }
+            let stmt = self.parse_stmt("none")?;
+            stmts.push(stmt);
+        }
+        Ok(stmts)
+    }
     fn load_import(&mut self, file: &str, funcs: &mut Vec<Function>) -> Result<(), ParseError> {
         let path = format!("{}.drc", file);
         let code = std::fs::read_to_string(&path)
@@ -307,6 +332,8 @@ impl Parser {
 
     fn parse_stmt(&mut self, current_return_type: &str) -> Result<Stmt, ParseError> {
         match self.peek() {
+            Some(Tokens::If) => self.parse_if(),
+            Some(Tokens::Loop) => self.parse_loop(),
             Some(Tokens::Return) => {
                 self.advance();
                 if matches!(self.peek(), Some(Tokens::Semicolon)) {
@@ -432,7 +459,37 @@ impl Parser {
 
         Ok(left)
     }
-    
+    fn parse_if(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(Tokens::If)?;
+        self.expect(Tokens::ParL)?;
+        let cond = self.parse_expr()?; 
+        self.expect(Tokens::ParR)?;
+        self.expect(Tokens::CurlyL)?;
+        let then_block = self.parse_block()?;
+        self.expect(Tokens::CurlyR)?;
+
+        let else_block = if self.peek() == Some(Tokens::Else) {
+            self.next();
+            self.expect(Tokens::CurlyL)?;
+            let block = self.parse_block()?;
+            self.expect(Tokens::CurlyR)?;
+            Some(block)
+        } else {
+            None
+        };
+
+        Ok(Stmt::If { condition: cond, then_block, else_block })
+    }
+    fn parse_loop(&mut self) -> Result<Stmt, ParseError> {
+        self.expect(Tokens::Loop)?;
+        self.expect(Tokens::ParL)?;
+        let cond = self.parse_expr()?;
+        self.expect(Tokens::ParR)?;
+        self.expect(Tokens::CurlyL)?;
+        let body = self.parse_block()?;
+        self.expect(Tokens::CurlyR)?;
+        Ok(Stmt::Loop { condition: cond, body })
+    }
 }
 
 impl Program {
@@ -531,6 +588,35 @@ fn gen_expr(e: &Expr) -> String {
 
 fn gen_stmt(s: &Stmt) -> String {
     match s {
+        Stmt::If { condition, then_block, else_block } => {
+            let mut code = String::new();
+            code.push_str("if ");
+            code.push_str(&self.generate_expr(condition));
+            code.push_str(" {\n");
+            for s in then_block {
+                code.push_str(&self.generate_stmt(s));
+            }
+            code.push_str("}\n");
+            if let Some(else_blk) = else_block {
+                code.push_str("else {\n");
+                for s in else_blk {
+                    code.push_str(&self.generate_stmt(s));
+                }
+                code.push_str("}\n");
+            }
+            code
+        }
+        Stmt::Loop { condition, body } => {
+            let mut code = String::new();
+            code.push_str("while ");
+            code.push_str(&self.generate_expr(condition));
+            code.push_str(" {\n");
+            for s in body {
+                code.push_str(&self.generate_stmt(s));
+            }
+            code.push_str("}\n");
+            code
+        }
         Stmt::VarDecl { name, var_type, value } => {
             let ty = type_from_str(var_type);
             format!("let mut {}: {} = {};", name, rust_type(&ty), gen_expr(value))
